@@ -18,10 +18,10 @@ class ListUser
   def self.getOpenIssuesForUsers(users)
 
     raise ArgumentError unless users.kind_of?(Array)
-	groups = Group.preload(:users).order('lastname').all
-	
     userIDs = users.map(&:id)
-	groupIDs = groups.map(&:id)
+
+    groupIDs = ListUser::getGroupIdsFromUsers(users)
+    
 	
     issue = Issue.arel_table
     project = Project.arel_table
@@ -333,7 +333,7 @@ class ListUser
   end
 
   def self.getUsersOfGroups(groups)
-    result = [User.current]
+    result = []
     
     groups.each do |grp|
       #result += grp.members.map(&:user) if grp.members.map(&:user).nil?
@@ -342,6 +342,20 @@ class ListUser
     
     
     return result.uniq
+  end
+
+  def self.getGroupIdsFromUsers(users)
+    userIDs = users.map(&:id)
+    groupIDs = [] 
+
+    users =  User.where(id: userIDs)
+    usrGroups = users.map(&:groups)
+
+    usrGroups.each do |group|
+      groupIDs += group.map(&:id)
+    end
+
+    return groupIDs.uniq
   end
 
   def self.addIssueInfoToSummary(summary, issueInfo, timeSpan)
