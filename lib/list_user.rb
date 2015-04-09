@@ -9,7 +9,7 @@ class ListUser
     return 0.0 if issue.estimated_hours.nil?
     return 0.0 if issue.children.any?
 
-    return issue.estimated_hours*((100.0 - issue.done_ratio)/100.0)
+    return issue.estimated_hours*((100.0 - issue.done_ratio)/100.0) / ListUser::assigneeCount(issue)
   end
 
   # Returns all issues that fulfill the following conditions:
@@ -18,9 +18,11 @@ class ListUser
   def self.getOpenIssuesForUsers(users)
 
     raise ArgumentError unless users.kind_of?(Array)
-
+	groups = Group.preload(:users).order('lastname').all
+	
     userIDs = users.map(&:id)
-
+	groupIDs = groups.map(&:id)
+	
     issue = Issue.arel_table
     project = Project.arel_table
     issue_status = IssueStatus.arel_table
@@ -29,7 +31,7 @@ class ListUser
     issues = Issue.joins(:project).
                    joins(:status).
                    joins(:assigned_to).
-                        where(issue[:assigned_to_id].in(userIDs)).      # Are assigned to one of the interesting users
+                        where(issue[:assigned_to_id].in(userIDs + groupIDs)).      # Are assigned to one of the interesting users
                         where(project[:status].eq(1)).                  # Do not belong to an inactive project
                         where(issue_status[:is_closed].eq(false))       # Is open
 
@@ -186,68 +188,82 @@ class ListUser
 
     issues.each do |issue|
 			
-			assignee = issue.assigned_to
-			
-      if !result.has_key?(issue.assigned_to) then
-			result[assignee] = {
-					:overdue_hours => 0.0,
-					:overdue_number => 0,
-					:total => Hash::new,
-					:invisible => Hash::new
-				}
-					
-				timeSpan.each do |day|
-					result[assignee][:total][day] = {
-						:hours => 0.0,
-						:holiday => !workingDays.include?(day)
-					}
-				end
-			end
-			
-			hoursForIssue = getHoursForIssuesPerDay(issue, timeSpan, today)
+		assignees= []
 
-			# Add the issue to the total workload, unless its overdue.
-			if issue.overdue? then
-				result[assignee][:overdue_hours]  += hoursForIssue[firstWorkingDayFromTodayOn][:hours];
-				result[assignee][:overdue_number] += 1
-			else
-				result[assignee][:total] = addIssueInfoToSummary(result[assignee][:total], hoursForIssue, timeSpan)
+		if isGroupIssue(issue)
+			group = Group::find(issue.assigned_to_id)
+			group.users.each do |u|
+				assignees.push(u)
 			end
+		else
+			assignees.push(issue.assigned_to)
+		end
+	  
 		
-			# If the issue is invisible, add it to the invisible issues summary.
-			# Otherwise, add it to the project (and its summary) to which it belongs
-			# to.
-			if !issue.visible? then
-				result[assignee][:invisible] = addIssueInfoToSummary(result[assignee][:invisible], hoursForIssue, timeSpan) unless issue.overdue?
-			else
-				project = issue.project
-				
-				if !result[assignee].has_key?(project) then
-					result[assignee][project] = {
-						:total => Hash::new,
+			# assignee = issue.assigned_to
+		
+		assignees.each do |assignee|
+		  if !result.has_key?(issue.assigned_to) then
+				result[assignee] = {
 						:overdue_hours => 0.0,
-						:overdue_number => 0
+						:overdue_number => 0,
+						:total => Hash::new,
+						:invisible => Hash::new
 					}
-					
+						
 					timeSpan.each do |day|
-						result[assignee][project][:total][day] = {
+						result[assignee][:total][day] = {
 							:hours => 0.0,
 							:holiday => !workingDays.include?(day)
 						}
 					end
 				end
+				
+				hoursForIssue = getHoursForIssuesPerDay(issue, timeSpan, today)
 
-				# Add the issue to the project workload summary, unless its overdue.
+				# Add the issue to the total workload, unless its overdue.
 				if issue.overdue? then
-					result[assignee][project][:overdue_hours]  += hoursForIssue[firstWorkingDayFromTodayOn][:hours];
-					result[assignee][project][:overdue_number] += 1
+					result[assignee][:overdue_hours]  += hoursForIssue[firstWorkingDayFromTodayOn][:hours];
+					result[assignee][:overdue_number] += 1
 				else
-					result[assignee][project][:total] = addIssueInfoToSummary(result[assignee][project][:total], hoursForIssue, timeSpan)
+					result[assignee][:total] = addIssueInfoToSummary(result[assignee][:total], hoursForIssue, timeSpan)
 				end
+			
+				# If the issue is invisible, add it to the invisible issues summary.
+				# Otherwise, add it to the project (and its summary) to which it belongs
+				# to.
+				if !issue.visible? then
+					result[assignee][:invisible] = addIssueInfoToSummary(result[assignee][:invisible], hoursForIssue, timeSpan) unless issue.overdue?
+				else
+					project = issue.project
+					
+					if !result[assignee].has_key?(project) then
+						result[assignee][project] = {
+							:total => Hash::new,
+							:overdue_hours => 0.0,
+							:overdue_number => 0
+						}
+						
+						timeSpan.each do |day|
+							result[assignee][project][:total][day] = {
+								:hours => 0.0,
+								:holiday => !workingDays.include?(day)
+							}
+						end
+					end
 
-				# Add it to the issues for that project in any case.
-				result[assignee][project][issue] = hoursForIssue
+					# Add the issue to the project workload summary, unless its overdue.
+					if issue.overdue? then
+						result[assignee][project][:overdue_hours]  += hoursForIssue[firstWorkingDayFromTodayOn][:hours];
+						result[assignee][project][:overdue_number] += 1
+					else
+						result[assignee][project][:total] = addIssueInfoToSummary(result[assignee][project][:total], hoursForIssue, timeSpan)
+					end
+
+					# Add it to the issues for that project in any case.
+					result[assignee][project][issue] = hoursForIssue
 			end
+		end
     end
 
     return result
@@ -343,4 +359,27 @@ class ListUser
 
 		return summary
 	end
+	
+	  def self.isGroupIssue(issue)
+      is_group = true
+
+    begin
+      group = Group::find(issue.assigned_to_id)
+    rescue Exception => e
+      is_group = false
+    end
+
+    return is_group
+  end
+
+  def self.assigneeCount(issue)
+    assignee_count = 1
+
+    if ListUser::isGroupIssue(issue)
+      group = Group::find(issue.assigned_to_id)
+      assignee_count = group.users.count
+    end
+    
+    return assignee_count.to_f
+  end
 end
