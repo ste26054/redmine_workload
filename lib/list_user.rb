@@ -3,6 +3,7 @@ class ListUser
 
   require 'dateTools'
 
+  # OK
   def self.getEstimatedTimeForIssue(issue)
     raise ArgumentError unless issue.kind_of?(Issue)
 
@@ -15,6 +16,7 @@ class ListUser
   # Returns all issues that fulfill the following conditions:
   #  * They are open
   #  * The project they belong to is active
+  # OK
   def self.getOpenIssuesForUsers(users)
 
     raise ArgumentError unless users.kind_of?(Array)
@@ -37,6 +39,8 @@ class ListUser
 
     #  Filter out all issues that have children; They do not *directly* add to
     # the workload
+    # Rails.logger.info "Issue IDs: #{issues.map(&:id)}"
+
     return issues.select { |x| x.leaf? }
   end
 
@@ -175,10 +179,13 @@ class ListUser
 	#								currently logged in user.
 	#´* :total.     Returns a summary of all issues for the user that this hash is
 	#								for.
-  def self.getHoursPerUserIssueAndDay(issues, timeSpan, today)
+  def self.getHoursPerUserIssueAndDay(issues, timeSpan, today, users)
     raise ArgumentError unless issues.kind_of?(Array)
     raise ArgumentError unless timeSpan.kind_of?(Range)
     raise ArgumentError unless today.kind_of?(Date)
+    raise ArgumentError unless users.kind_of?(Array)
+    userIDs = users.map(&:id)
+
 		
     workingDays = DateTools::getWorkingDaysInTimespan(timeSpan)
 		
@@ -187,37 +194,36 @@ class ListUser
     result = {}
 
     issues.each do |issue|
-			
 		assignees= []
 
 		if isGroupIssue(issue)
 			group = Group::find(issue.assigned_to_id)
 			group.users.each do |u|
-				assignees.push(u)
+        if u.id.in?(userIDs)
+				  assignees.push(u)
+        end
 			end
 		else
 			assignees.push(issue.assigned_to)
 		end
-	  
-		
-			# assignee = issue.assigned_to
+
 		
 		assignees.each do |assignee|
-		  if !result.has_key?(issue.assigned_to) then
+		  if !result.has_key?(assignee)
 				result[assignee] = {
-						:overdue_hours => 0.0,
-						:overdue_number => 0,
-						:total => Hash::new,
-						:invisible => Hash::new
-					}
+					:overdue_hours => 0.0,
+					:overdue_number => 0,
+					:total => Hash::new,
+					:invisible => Hash::new
+				}
 						
-					timeSpan.each do |day|
-						result[assignee][:total][day] = {
-							:hours => 0.0,
-							:holiday => !workingDays.include?(day)
-						}
-					end
+				timeSpan.each do |day|
+					result[assignee][:total][day] = {
+						:hours => 0.0,
+						:holiday => !workingDays.include?(day)
+					}
 				end
+			end
 				
 				hoursForIssue = getHoursForIssuesPerDay(issue, timeSpan, today)
 
